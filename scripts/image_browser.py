@@ -40,17 +40,7 @@ except ImportError:
 importlib.reload(wib_db)
 
 yappi_do = False
-favorite_tab_name = "Favorites"
-default_tab_options = ["txt2img", "img2img", "txt2img-grids", "img2img-grids", "Extras", favorite_tab_name, "Others"]
-tabs_list = [tab.strip() for tab in chain.from_iterable(csv.reader(StringIO(opts.image_browser_active_tabs))) if tab] if hasattr(opts, "image_browser_active_tabs") else default_tab_options
-try:
-    if opts.image_browser_enable_maint:
-        tabs_list.append("Maintenance")  # mandatory tab
-except AttributeError:
-    tabs_list.append("Maintenance")  # mandatory tab
-
-components_list = ["Sort by", "Filename keyword search", "EXIF keyword search", "Ranking Filter", "Aesthestic Score", "Generation Info", "File Name", "File Time", "Open Folder", "Send to buttons", "Copy to directory", "Gallery Controls Bar", "Ranking Bar", "Delete Bar", "Additional Generation Info"]
-
+tabs_list = ["Others", "txt2img", "img2img", "Extras"]
 num_of_imgs_per_page = 0
 loads_files_num = 0
 image_ext_list = [".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"]
@@ -702,14 +692,6 @@ def get_all_images(dir_name, sort_by, sort_order, keyword, tab_base_tag_box, img
     elif sort_by == "random":
         random.shuffle(fileinfos)
         filenames = [finfo[0] for finfo in fileinfos]
-    elif sort_by == "ranking":
-        finfo_ranked = {}
-        for fi_info in fileinfos:
-            finfo_ranked[fi_info[0]] = get_ranking(fi_info[0])
-        if not down_symbol:
-            fileinfos = dict(sorted(finfo_ranked.items(), key=lambda x: (x[1], x[0])))
-        else:
-            fileinfos = dict(reversed(sorted(finfo_ranked.items(), key=lambda x: (x[1], x[0]))))
         filenames = [finfo for finfo in fileinfos]
     elif sort_by == "aesthetic_score":
         fileinfo_aes = {}
@@ -826,40 +808,9 @@ def update_move_text_one(btn):
 def update_move_text(favorites_btn, to_dir_btn):
     return update_move_text_one(favorites_btn), update_move_text_one(to_dir_btn)
 
-def get_ranking(filename):
-    ranking_value = wib_db.select_ranking(filename)
-    return ranking_value
-
-def update_ranking(img_file_name, ranking, img_file_info):
-    saved_ranking = get_ranking(img_file_name)
-    if saved_ranking != ranking:
-        # Update db
-        wib_db.update_ranking(img_file_name, ranking)
-        if opts.image_browser_ranking_pnginfo and any(img_file_name.endswith(ext) for ext in image_ext_list[:3]):
-            # Update exif
-            image = Image.open(img_file_name)
-            geninfo, items = images.read_info_from_image(image)  
-            if geninfo is not None:
-                if "Ranking: " in geninfo:
-                    if ranking == "None":
-                        geninfo = re.sub(r', Ranking: \d+', '', geninfo)
-                    else:
-                        geninfo = re.sub(r'Ranking: \d+', f'Ranking: {ranking}', geninfo)
-                else:
-                    geninfo = f'{geninfo}, Ranking: {ranking}'
-            
-            original_time = os.path.getmtime(img_file_name)
-            images.save_image(image, os.path.dirname(img_file_name), "", extension=os.path.splitext(img_file_name)[1][1:], info=geninfo, forced_filename=os.path.splitext(os.path.basename(img_file_name))[0], save_to_dirs=False)
-            os.utime(img_file_name, (original_time, original_time))
-            img_file_info = geninfo
-    return img_file_info
-            
-def create_tab(tab: ImageBrowserTab, current_gr_tab: gr.Tab, is_last):
-    global init, exif_cache, aes_cache, openoutpaint, controlnet
-    dir_name = None
-    others_dir = False
-    maint = False
-    standard_ui = True
+def create_tab(tabname, current_gr_tab):
+    global init, exif_cache, aes_cache
+    custom_dir = False
     path_recorder = {}
     path_recorder_formatted = []
     path_recorder_unformatted = []
@@ -875,12 +826,16 @@ def create_tab(tab: ImageBrowserTab, current_gr_tab: gr.Tab, is_last):
     openoutpaint = check_ext("openoutpaint")
     controlnet = check_ext("controlnet")
 
-    if tab.name == "Others":
-        others_dir = True
-        standard_ui = False
-    elif tab.name == "Maintenance":
-        maint = True
-        standard_ui = False
+    if tabname == "txt2img":
+        dir_name = opts.outdir_txt2img_samples
+    elif tabname == "img2img":
+        dir_name = opts.outdir_img2img_samples
+    elif tabname == "txt2img-grids":    #added by HaylockGrant to add a new tab for grid images
+        dir_name = opts.outdir_txt2img_grids
+    elif tabname == "img2img-grids":    #added by HaylockGrant to add a new tab for grid images
+        dir_name = opts.outdir_img2img_grids
+    elif tabname == "Extras":
+        dir_name = opts.outdir_extras_samples
     else:
         dir_name = tab.path
 
@@ -888,104 +843,47 @@ def create_tab(tab: ImageBrowserTab, current_gr_tab: gr.Tab, is_last):
         dir_name = str(Path(dir_name))
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
-
-    with gr.Row():                 
-        path_recorder = gr.State(path_recorder)
-        with gr.Column(scale=10):
-            warning_box = gr.HTML("<p>&nbsp")
-        with gr.Column(scale=5, visible=(tab.name==favorite_tab_name)):
-            gr.HTML(f"<p>Favorites path from settings: {opts.outdir_save}")
-
-    with gr.Row(visible=others_dir):
-        with gr.Column(scale=10):
-            img_path = gr.Textbox(dir_name, label="Images directory", placeholder="Input images directory", interactive=others_dir)
-        with gr.Column(scale=1):
-            img_path_depth = gr.Number(value="0", label="Sub directory depth")
-        with gr.Column(scale=1):
-            img_path_save_button = gr.Button(value="Add to / replace in saved directories")
-
-    with gr.Row(visible=others_dir):
-        with gr.Column(scale=10):
-            img_path_browser = gr.Dropdown(choices=path_recorder_formatted, label="Saved directories")
-        with gr.Column(scale=1):
-            img_path_remove_button = gr.Button(value="Remove from saved directories")
-
-    with gr.Row(visible=others_dir): 
-        with gr.Column(scale=10):
-            img_path_subdirs = gr.Dropdown(choices=[none_select], value=none_select, label="Sub directories", interactive=True, elem_id=f"{tab.base_tag}_img_path_subdirs")
-        with gr.Column(scale=1):
-            img_path_subdirs_button = gr.Button(value="Get sub directories")
-    
-    with gr.Row(visible=standard_ui, elem_id=f"{tab.base_tag}_image_browser") as main_panel:
+        
+    with gr.Row(visible=not custom_dir, elem_id=f"{tabname}_image_browser") as main_panel:
         with gr.Column():  
             with gr.Row():    
                 with gr.Column(scale=2):    
-                    with gr.Row() as gallery_controls_panel:
-                        first_page = gr.Button('First Page')
-                        prev_page = gr.Button('Prev Page', elem_id=f"{tab.base_tag}_image_browser_prev_page")
-                        page_index = gr.Number(value=1, label="Page Index")
-                        refresh_index_button = ToolButton(value=refresh_symbol)
-                        next_page = gr.Button('Next Page', elem_id=f"{tab.base_tag}_image_browser_next_page")
-                        end_page = gr.Button('End Page') 
-                    with gr.Row() as ranking_panel:
-                        ranking = gr.Radio(value="None", choices=["1", "2", "3", "4", "5", "None"], label="ranking", elem_id=f"{tab.base_tag}_image_browser_ranking", interactive=True, visible=False)
+                    with gr.Row(variant='compact', elem_id="buttons_images_history"):
+                        first_page = gr.Button('⏪')
+                        prev_page = gr.Button('◀️', elem_id=f"{tabname}_image_browser_prev_page")
+                        page_index = gr.Number(value=1, label="Page Index", visible=False)
+                        refresh_index_button = ToolButton(value=refresh_symbol, visible=False)
+                        next_page = gr.Button('▶️', elem_id=f"{tabname}_image_browser_next_page")
+                        end_page = gr.Button('⏩')
                     with gr.Row():
-                        image_gallery = gr.Gallery(show_label=False, elem_id=f"{tab.base_tag}_image_browser_gallery").style(grid=opts.image_browser_page_columns)
+                        image_gallery = gr.Gallery(show_label=False, elem_id=f"{tabname}_image_browser_gallery").style(grid=opts.image_browser_page_columns)
                     with gr.Row() as delete_panel:
-                        with gr.Column(scale=1):
+                        with gr.Column(scale=1, visible=False):
                             delete_num = gr.Number(value=1, interactive=True, label="delete next", elem_id=f"{tab.base_tag}_image_browser_del_num")
                             delete_confirm = gr.Checkbox(value=False, label="also delete off-screen images")
                         with gr.Column(scale=3):
-                            delete = gr.Button('Delete', elem_id=f"{tab.base_tag}_image_browser_del_img_btn")
-                    with gr.Row() as info_add_panel:
-                        with gr.Accordion("Additional Generation Info", open=False):
-                            img_file_info_add = gr.HTML()
+                            delete = gr.Button('Delete', elem_id=f"{tabname}_image_browser_del_img_btn")
 
-                with gr.Column(scale=1): 
-                    with gr.Row(scale=0.5) as sort_panel:
-                        sort_by = gr.Dropdown(value="date", choices=["path name", "date", "aesthetic_score", "random", "cfg scale", "steps", "seed", "sampler", "size", "model", "model hash", "ranking"], label="Sort by")
-                        sort_order = ToolButton(value=down_symbol)
-                    with gr.Row() as filename_search_panel:
-                        filename_keyword_search = gr.Textbox(value="", label="Filename keyword search")
-                    with gr.Box() as exif_search_panel:
-                        with gr.Row():
-                                exif_keyword_search = gr.Textbox(value="", label="EXIF keyword search")
-                                negative_prompt_search = gr.Radio(value="No", choices=["No", "Yes", "Only"], label="Search negative prompt", interactive=True)
-                        with gr.Row():
-                                case_sensitive = gr.Checkbox(value=False, label="case sensitive")
-                                use_regex = gr.Checkbox(value=False, label=r"regex - e.g. ^(?!.*Hires).*$")
-                    with gr.Column() as ranking_filter_panel:
-                        ranking_filter = gr.Radio(value="All", choices=["All", "1", "2", "3", "4", "5", "None"], label="Ranking filter", interactive=True)
-                    with gr.Row() as aesthetic_score_filter_panel:
-                        aes_filter_min = gr.Textbox(value="", label="Minimum aesthetic_score")
-                        aes_filter_max = gr.Textbox(value="", label="Maximum aesthetic_score")
-                    with gr.Row() as generation_info_panel:
-                        img_file_info = gr.Textbox(label="Generation Info", interactive=False, lines=6)
-                    with gr.Row() as filename_panel:
-                        img_file_name = gr.Textbox(value="", label="File Name", interactive=False)
-                    with gr.Row() as filetime_panel:
-                        img_file_time= gr.HTML()
-                    with gr.Row() as open_folder_panel:
-                        open_folder_button = gr.Button(folder_symbol, visible=standard_ui or others_dir)
-                        gr.HTML("&nbsp")
-                        gr.HTML("&nbsp")
-                        gr.HTML("&nbsp")
-                    with gr.Row(elem_id=f"{tab.base_tag}_image_browser_button_panel", visible=False) as button_panel:
+                with gr.Column(scale=1):
+                    with gr.Row(variant='compact', elem_id=f"{tabname}_image_browser_button_panel", visible=False) as button_panel:
+                        try:
+                            send_to_buttons = modules.generation_parameters_copypaste.create_buttons(["txt2img", "img2img", "extras"])
+                        except:
+                            pass
+                    with gr.Row():
                         with gr.Column():
-                            with gr.Row():
-                                if tab.name != favorite_tab_name:
-                                    favorites_btn = gr.Button(f'{copy_move[opts.image_browser_copy_image]} to favorites', elem_id=f"{tab.base_tag}_image_browser_favorites_btn")
-                                try:
-                                    send_to_buttons = modules.generation_parameters_copypaste.create_buttons(["txt2img", "img2img", "inpaint", "extras"])
-                                except:
-                                    pass
-                                sendto_openoutpaint = gr.Button("Send to openOutpaint", elem_id=f"{tab.base_tag}_image_browser_openoutpaint_btn", visible=openoutpaint)
-                            with gr.Row(visible=controlnet):
-                                sendto_controlnet_txt2img = gr.Button("Send to txt2img ControlNet", visible=controlnet)
-                                sendto_controlnet_img2img = gr.Button("Send to img2img ControlNet", visible=controlnet)
-                                controlnet_max = opts.data.get("control_net_max_models_num", 1)
-                                sendto_controlnet_num = gr.Dropdown(list(range(controlnet_max)), label="ControlNet number", value="0", interactive=True, visible=(controlnet and controlnet_max > 1))
-                    with gr.Row(elem_id=f"{tab.base_tag}_image_browser_to_dir_panel", visible=False) as to_dir_panel:
+                            img_file_info = gr.Textbox(label="Generate Info", interactive=False, lines=6)
+                            img_file_name = gr.Textbox(value="", label="File Name", interactive=False)
+                            img_file_time = gr.HTML()
+                    with gr.Row(scale=0.5):
+                        sort_by = gr.Dropdown(value="date", choices=["path name", "date", "aesthetic_score", "random", "cfg scale", "steps", "seed", "sampler", "size", "model", "model hash"], label="sort by")
+                        sort_order = ToolButton(value=down_symbol)
+                    with gr.Row():
+                        keyword = gr.Textbox(value="", label="filename keyword", visible=False)
+                    with gr.Row():
+                            exif_keyword = gr.Textbox(value="", label="exif keyword")
+                            negative_prompt_search = gr.Radio(value="No", choices=["No", "Yes", "Only"], label="Search negative prompt", interactive=True)
+                    with gr.Row(elem_id=f"{tabname}_image_browser_to_dir_panel", visible=False) as to_dir_panel:
                         with gr.Box():
                             with gr.Row():
                                 to_dir_path = gr.Textbox(label="Directory path")
@@ -1087,6 +985,37 @@ def create_tab(tab: ImageBrowserTab, current_gr_tab: gr.Tab, is_last):
             hidden_component_map[item].visible = False
             override_hidden.add(hidden_component_map[item])
 
+    with gr.Row():
+        path_recorder = gr.State(path_recorder)
+        with gr.Column(scale=10):
+            warning_box = gr.HTML("<p>&nbsp")
+
+    with gr.Row(visible=custom_dir):
+        with gr.Column(scale=10):
+            img_path = gr.Textbox(dir_name, label="Images directory", placeholder="Input images directory", interactive=custom_dir)
+        with gr.Column(scale=1):
+            img_path_depth = gr.Number(value="0", label="Sub directory depth")
+        with gr.Column(scale=1):
+            img_path_save_button = gr.Button(value="Add to / replace in saved directories")
+
+    with gr.Row(visible=custom_dir):
+        with gr.Column(scale=10):
+            img_path_browser = gr.Dropdown(choices=path_recorder_formatted, label="Saved directories")
+        with gr.Column(scale=1):
+            img_path_remove_button = gr.Button(value="Remove from saved directories")
+
+    with gr.Row(visible=custom_dir):
+        with gr.Column(scale=10):
+            img_path_subdirs = gr.Dropdown(choices=[none_select], value=none_select, label="Sub directories", interactive=True, elem_id=f"{tabname}_img_path_subdirs")
+        with gr.Column(scale=1):
+            img_path_subdirs_button = gr.Button(value="Get sub directories")
+
+    with gr.Row(visible=custom_dir):
+        with gr.Column(scale=10):
+            gr.Dropdown(visible=False)
+        with gr.Column(scale=1):
+            exif_rebuild_button = gr.Button(value=f"{rebuild_symbol} Rebuild exif cache")
+
     change_dir_outputs = [warning_box, main_panel, img_path_browser, path_recorder, load_switch, img_path, img_path_depth]
     img_path.submit(change_dir, inputs=[img_path, path_recorder, load_switch, img_path_browser, img_path_depth, img_path], outputs=change_dir_outputs)
     img_path_browser.change(change_dir, inputs=[img_path_browser, path_recorder, load_switch, img_path_browser, img_path_depth, img_path], outputs=change_dir_outputs)
@@ -1094,14 +1023,8 @@ def create_tab(tab: ImageBrowserTab, current_gr_tab: gr.Tab, is_last):
     to_dir_saved.change(change_dir, inputs=[to_dir_saved, path_recorder, to_dir_load_switch, to_dir_saved, img_path_depth, to_dir_path], outputs=[warning_box, main_panel, to_dir_saved, path_recorder, to_dir_load_switch, to_dir_path, img_path_depth])
 
     #delete
-    delete.click(delete_image, inputs=[tab_base_tag_box, delete_num, img_file_name, filenames, image_index, visible_img_num, delete_confirm, turn_page_switch, select_image_switch, image_page_list], outputs=[filenames, delete_num, turn_page_switch, visible_img_num, image_gallery, select_image_switch, image_page_list])
-    select_image_switch.change(fn=None, inputs=[tab_base_tag_box, image_index], outputs=None, _js="image_browser_select_image")
-
-    if tab.name == favorite_tab_name:
-        img_file_name.change(fn=update_move_text_one, inputs=[to_dir_btn], outputs=[to_dir_btn])
-    else:
-        favorites_btn.click(save_image, inputs=[img_file_name, filenames, page_index, turn_page_switch, favorites_path], outputs=[collected_warning, filenames, page_index, turn_page_switch])
-        img_file_name.change(fn=update_move_text, inputs=[favorites_btn, to_dir_btn], outputs=[favorites_btn, to_dir_btn])
+    delete.click(delete_image, inputs=[delete_num, img_file_name, filenames, image_index, visible_img_num], outputs=[filenames, delete_num, visible_img_num, delete_state])
+    delete.click(fn=None, _js="image_browser_delete", inputs=[delete_num, tabname_box, image_index], outputs=None)
     to_dir_btn.click(save_image, inputs=[img_file_name, filenames, page_index, turn_page_switch, to_dir_path], outputs=[collected_warning, filenames, page_index, turn_page_switch])
 
     #turn page
@@ -1115,20 +1038,18 @@ def create_tab(tab: ImageBrowserTab, current_gr_tab: gr.Tab, is_last):
     aes_filter_min.submit(lambda s:(1, -s), inputs=[turn_page_switch], outputs=[page_index, turn_page_switch])
     aes_filter_max.submit(lambda s:(1, -s), inputs=[turn_page_switch], outputs=[page_index, turn_page_switch])
     sort_by.change(lambda s:(1, -s), inputs=[turn_page_switch], outputs=[page_index, turn_page_switch])
-    ranking_filter.change(lambda s:(1, -s), inputs=[turn_page_switch], outputs=[page_index, turn_page_switch])
     page_index.submit(lambda s: -s, inputs=[turn_page_switch], outputs=[turn_page_switch])
     renew_page.click(lambda s: -s, inputs=[turn_page_switch], outputs=[turn_page_switch])
     refresh_index_button.click(lambda p, s:(p, -s), inputs=[page_index, turn_page_switch], outputs=[page_index, turn_page_switch])
     img_path_depth.change(lambda s: -s, inputs=[turn_page_switch], outputs=[turn_page_switch])
 
     turn_page_switch.change(
-        fn=get_image_page, 
-        inputs=[img_path, page_index, filenames, filename_keyword_search, sort_by, sort_order, tab_base_tag_box, img_path_depth, ranking_filter, aes_filter_min, aes_filter_max, exif_keyword_search, negative_prompt_search, use_regex, case_sensitive], 
-        outputs=[filenames, page_index, image_gallery, img_file_name, img_file_time, img_file_info, visible_img_num, warning_box, hidden, image_page_list]
+        fn=get_image_page,
+        inputs=[img_path, page_index, filenames, keyword, sort_by, sort_order, tabname_box, img_path_depth, exif_keyword, negative_prompt_search, delete_state],
+        outputs=[filenames, page_index, image_gallery, img_file_name, img_file_time, img_file_info, visible_img_num, warning_box, delete_state]
     )
-    turn_page_switch.change(fn=None, inputs=[tab_base_tag_box], outputs=None, _js="image_browser_turnpage")
-    hide_on_thumbnail_view = [delete_panel, button_panel, ranking, to_dir_panel, info_add_panel]
-    turn_page_switch.change(fn=lambda:(gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)), inputs=None, outputs=hide_on_thumbnail_view)
+    turn_page_switch.change(fn=None, inputs=[tabname_box], outputs=None, _js="image_browser_turnpage")
+    turn_page_switch.change(fn=lambda:(gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)), inputs=None, outputs=[delete_panel, button_panel, to_dir_panel])
 
     sort_order.click(
         fn=sort_order_flip,
@@ -1186,14 +1107,10 @@ def create_tab(tab: ImageBrowserTab, current_gr_tab: gr.Tab, is_last):
     set_index.click(show_image_info, _js="image_browser_get_current_img", inputs=[tab_base_tag_box, image_index, page_index, filenames, turn_page_switch], outputs=[img_file_name, img_file_time, image_index, hidden, turn_page_switch, img_file_info_add])
     set_index.click(fn=lambda:(gr.update(visible=delete_panel not in override_hidden), gr.update(visible=button_panel not in override_hidden), gr.update(visible=ranking_panel not in override_hidden), gr.update(visible=to_dir_panel not in override_hidden), gr.update(visible=info_add_panel not in override_hidden)), inputs=None, outputs=hide_on_thumbnail_view)
     img_file_name.change(fn=lambda : "", inputs=None, outputs=[collected_warning])
-    img_file_name.change(get_ranking, inputs=img_file_name, outputs=ranking)
 
    
     hidden.change(fn=run_pnginfo, inputs=[hidden, img_path, img_file_name], outputs=[info1, img_file_info, info2, image_browser_prompt, image_browser_neg_prompt])
-    
-    #ranking
-    ranking.change(update_ranking, inputs=[img_file_name, ranking, img_file_info], outputs=[img_file_info])
-        
+
     try:
         modules.generation_parameters_copypaste.bind_buttons(send_to_buttons, hidden, img_file_info)
     except:
@@ -1281,16 +1198,13 @@ def on_ui_tabs():
     loads_files_num = int(opts.image_browser_pages_perload * num_of_imgs_per_page)
     with gr.Blocks(analytics_enabled=False) as image_browser:
         with gr.Tabs(elem_id="image_browser_tabs_container") as tabs:
-            for i, tab in enumerate(tabs_list):
-                with gr.Tab(tab.name, elem_id=f"{tab.base_tag}_image_browser_container") as current_gr_tab:
-                    with gr.Blocks(analytics_enabled=False):
-                        is_last = (i == len(tabs_list) - 1)
-                        create_tab(tab, current_gr_tab, is_last)
-        gr.Checkbox(opts.image_browser_preload, elem_id="image_browser_preload", visible=False)
-        gr.Textbox(",".join( [tab.base_tag for tab in tabs_list] ), elem_id="image_browser_tab_base_tags_list", visible=False)
-        gr.Textbox(value=gr.__version__, elem_id="image_browser_gradio_version", visible=False)
-
-    return (image_browser , "Image Browser", "image_browser"),
+            for tab in tabs_list:
+                with gr.Tab(tab, elem_id=f"{tab}_image_browser_container") as current_gr_tab:
+                    with gr.Blocks(analytics_enabled=False) :
+                        create_tab(tab, current_gr_tab)
+        gr.Checkbox(opts.image_browser_preload, elem_id="image_browser_preload", visible=False)         
+        gr.Textbox(",".join(tabs_list), elem_id="image_browser_tabnames_list", visible=False) 
+    return (image_browser , "Images", "image_browser"),
 
 def move_setting(cur_setting_name, old_setting_name, option_info, section, added):
     try:
